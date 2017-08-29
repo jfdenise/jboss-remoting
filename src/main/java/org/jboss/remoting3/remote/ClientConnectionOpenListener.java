@@ -218,7 +218,7 @@ final class ClientConnectionOpenListener implements ChannelListener<ConduitStrea
                         }
                         if (remoteServerName == null) {
                             // they didn't give their name; guess it from the IP
-                            remoteServerName = connection.getPeerAddress().getHostName();
+                            remoteServerName = "localhost";//connection.getPeerAddress().getHostName();
                         }
                         sendCapRequest(remoteServerName);
                         return;
@@ -479,7 +479,7 @@ final class ClientConnectionOpenListener implements ChannelListener<ConduitStrea
                                         sendBuffer.put(response);
                                     }
                                 }
-
+                                
                                 sendBuffer.flip();
                                 connection.setReadListener(authentication, true);
                                 connection.send(pooledSendBuffer);
@@ -679,54 +679,79 @@ final class ClientConnectionOpenListener implements ChannelListener<ConduitStrea
                         return;
                     }
                     case Protocol.AUTH_COMPLETE: {
-                        client.trace("Client received authentication complete");
-                        messageReader.suspendReads();
-                        connection.getExecutor().execute(() -> {
-                            try {
-                                final boolean clientComplete = saslClient.isComplete();
-                                final byte[] challenge = Buffers.take(buffer, buffer.remaining());
-                                if (!clientComplete) try {
-                                    final byte[] response = saslClient.evaluateChallenge(challenge);
-                                    if (response != null && response.length > 0) {
-                                        connection.handleException(new SaslException(saslClient.getMechanismName() + ": Received extra auth message after completion"));
-                                        saslDispose(saslClient);
-                                        return;
+                        try {
+                            client.trace("Client received authentication complete WITH FIX");
+                            messageReader.suspendReads();
+                            connection.getExecutor().execute(() -> {
+                                try {
+                                    client.trace("Executing auth complete");
+                                    final boolean clientComplete = saslClient.isComplete();
+                                    final byte[] challenge = Buffers.take(buffer, buffer.remaining());
+                                    if (!clientComplete) {
+                                        client.trace("Executing auth complete, !clientComplete");
+                                        try {
+                                            final byte[] response = saslClient.evaluateChallenge(challenge);
+                                            if (response != null && response.length > 0) {
+                                                client.trace("Executing auth complete, error 1");
+                                                connection.handleException(new SaslException(saslClient.getMechanismName() + ": Received extra auth message after completion"));
+                                                saslDispose(saslClient);
+                                                client.trace("Executing auth complete, error 1.1");
+                                                return;
+                                            }
+                                            if (!saslClient.isComplete()) {
+                                                client.trace("Executing auth complete, error 2");
+                                                connection.handleException(new SaslException(saslClient.getMechanismName() + ": Client not complete after processing auth complete message"));
+                                                saslDispose(saslClient);
+                                                client.trace("Executing auth complete, error 2.1");
+                                                return;
+                                            }
+                                        } catch (Throwable e) {
+                                            final String mechanismName = saslClient.getMechanismName();
+                                            client.debugf("Client authentication failed for mechanism %s: %s", mechanismName, e);
+                                            failedMechs.put(mechanismName, e);
+                                            saslDispose(saslClient);
+                                            sendCapRequest(serverName);
+                                            return;
+                                        }
                                     }
-                                    if (!saslClient.isComplete()) {
-                                        connection.handleException(new SaslException(saslClient.getMechanismName() + ": Client not complete after processing auth complete message"));
-                                        saslDispose(saslClient);
-                                        return;
+                                    client.trace("Executing auth complete, clientComplete");
+                                    final Object qop = saslClient.getNegotiatedProperty(Sasl.QOP);
+                                    if ("auth-int".equals(qop) || "auth-conf".equals(qop)) {
+                                        connection.setSaslWrapper(SaslWrapper.create(saslClient));
                                     }
-                                } catch (Throwable e) {
-                                    final String mechanismName = saslClient.getMechanismName();
-                                    client.debugf("Client authentication failed for mechanism %s: %s", mechanismName, e);
-                                    failedMechs.put(mechanismName, e);
-                                    saslDispose(saslClient);
-                                    sendCapRequest(serverName);
+                                    final Object principalObj = saslClient.getNegotiatedProperty(WildFlySasl.PRINCIPAL);
+                                    // auth complete.
+                                    final ConnectionHandlerFactory connectionHandlerFactory = connectionContext -> {
+                                        client.trace("Client received authentication complete, connectionHandlerFactory");
+                                        // this happens immediately.
+                                        final String hostName = "localhost";//connection.getLocalAddress().getHostName();
+                                        client.trace("Client received authentication complete, connectionHandlerFactory " + hostName);
+                                        final RemoteConnectionHandler connectionHandler = new RemoteConnectionHandler(connectionContext, connection, maxInboundChannels, maxOutboundChannels, principalObj instanceof Principal ? (Principal) principalObj : AnonymousPrincipal.getInstance(), remoteEndpointName, behavior, authCap, offeredMechanisms, serverName, hostName);
+                                        connection.setReadListener(new RemoteReadListener(connectionHandler, connection), false);
+                                        connection.getRemoteConnectionProvider().addConnectionHandler(connectionHandler);
+                                        client.trace("Client received authentication complete, connectionHandlerFactory return");
+                                        return connectionHandler;
+                                    };
+                                    connection.getResult().setResult(connectionHandlerFactory);
+                                    client.trace("Client received authentication complete, connectionHandlerFactory connection.getResult().setResult()");
+                                    messageReader.resumeReads();
                                     return;
+                                } catch (Exception thr) {
+                                    client.trace("Client received authentication complete, Exception", thr);
+                                    throw new RuntimeException(thr);
+                                } finally {
+                                    try {
+                                        message.free();
+                                    } catch (Exception thr) {
+                                        client.trace("Client received authentication complete, Exception", thr);
+                                        throw new RuntimeException(thr);
+                                    }
                                 }
-                                final Object qop = saslClient.getNegotiatedProperty(Sasl.QOP);
-                                if ("auth-int".equals(qop) || "auth-conf".equals(qop)) {
-                                    connection.setSaslWrapper(SaslWrapper.create(saslClient));
-                                }
-                                final Object principalObj = saslClient.getNegotiatedProperty(WildFlySasl.PRINCIPAL);
-                                // auth complete.
-                                final ConnectionHandlerFactory connectionHandlerFactory = connectionContext -> {
-
-                                    // this happens immediately.
-                                    final String hostName = connection.getLocalAddress().getHostName();
-                                    final RemoteConnectionHandler connectionHandler = new RemoteConnectionHandler(connectionContext, connection, maxInboundChannels, maxOutboundChannels, principalObj instanceof Principal ? (Principal) principalObj : AnonymousPrincipal.getInstance(), remoteEndpointName, behavior, authCap, offeredMechanisms, serverName, hostName);
-                                    connection.setReadListener(new RemoteReadListener(connectionHandler, connection), false);
-                                    connection.getRemoteConnectionProvider().addConnectionHandler(connectionHandler);
-                                    return connectionHandler;
-                                };
-                                connection.getResult().setResult(connectionHandlerFactory);
-                                messageReader.resumeReads();
-                                return;
-                            } finally {
-                                message.free();
-                            }
-                        });
+                            });
+                        } catch (Exception thr) {
+                            client.trace("Client received authentication complete, Exception", thr);
+                            throw new RuntimeException(thr);
+                        }
                         free = false;
                         return;
                     }

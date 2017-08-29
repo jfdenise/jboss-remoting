@@ -84,7 +84,7 @@ final class ServerConnectionOpenListener  implements ChannelListener<ConduitStre
         if (optionMap.contains(RemotingOptions.SERVER_NAME)) {
             serverName = optionMap.get(RemotingOptions.SERVER_NAME);
         } else {
-            serverName = connection.getLocalAddress().getHostName();
+            serverName = "localhost";//connection.getLocalAddress().getHostName();
         }
     }
 
@@ -490,7 +490,7 @@ final class ServerConnectionOpenListener  implements ChannelListener<ConduitStre
                                 if (!isInitial && ("auth-int".equals(qop) || "auth-conf".equals(qop))) {
                                     connection.setSaslWrapper(SaslWrapper.create(saslServer));
                                 }
-                                final String peerName = connection.getPeerAddress().getHostName();
+                                final String peerName = "localhost";//connection.getPeerAddress().getHostName();
                                 final RemoteConnectionHandler connectionHandler = new RemoteConnectionHandler(
                                     connectionContext, connection, maxInboundChannels, maxOutboundChannels, AnonymousPrincipal.getInstance(), remoteEndpointName, behavior, authCap, offeredMechanisms, peerName, serverName);
                                 connection.getRemoteConnectionProvider().addConnectionHandler(connectionHandler);
